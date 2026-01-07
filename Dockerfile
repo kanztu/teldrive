@@ -2,7 +2,7 @@
 # This differs from goreleaser.dockerfile which expects pre-built binaries
 
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make nodejs npm
@@ -16,12 +16,11 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Install Task (if needed for build process)
-RUN sh -c "$(curl -ssL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+# Create dummy UI dist directory (UI is optional for backend)
+RUN mkdir -p ui/dist && echo "Docker build" > ui/dist/index.html
 
-# Build UI and generate code (matching goreleaser before hooks)
-RUN task ui || true
-RUN task gen || true
+# Generate API code (required for compilation)
+RUN go generate ./...
 
 # Build the binary
 ARG TARGETOS=linux
