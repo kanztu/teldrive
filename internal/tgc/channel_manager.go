@@ -91,9 +91,13 @@ func (cm *ChannelManager) GetChannelForUpload(ctx context.Context, userID int64)
 func (cm *ChannelManager) isChannelNearLimit(channelID int64) bool {
 	var totalParts int64
 
+	// Handle NULL, scalar, and array cases for parts column
+	// - NULL parts: return 0
+	// - Scalar parts: return 0 (invalid data, but don't crash)
+	// - Array parts: return array length
 	err := cm.db.Model(&models.File{}).
 		Where("channel_id = ?", channelID).
-		Select("COALESCE(SUM(CASE WHEN jsonb_typeof(parts) = 'array' THEN jsonb_array_length(parts) ELSE 0 END), 0) as total_parts").
+		Select("COALESCE(SUM(CASE WHEN parts IS NULL THEN 0 WHEN jsonb_typeof(parts) = 'array' THEN jsonb_array_length(parts) ELSE 0 END), 0) as total_parts").
 		Scan(&totalParts).Error
 
 	if err != nil {

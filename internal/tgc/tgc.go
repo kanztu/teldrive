@@ -154,6 +154,11 @@ func WithRateLimit() middlewareOption {
 		if mc.config.RateLimit {
 			mc.middlewares = append(mc.middlewares,
 				ratelimit.New(rate.Every(time.Millisecond*time.Duration(mc.config.Rate)), mc.config.RateBurst))
+		} else {
+			// Always apply rate limiting with conservative defaults (25 req/sec, burst 5)
+			// to prevent FLOOD_WAIT errors from Telegram API
+			mc.middlewares = append(mc.middlewares,
+				ratelimit.New(rate.Every(40*time.Millisecond), 5))
 		}
 	}
 }

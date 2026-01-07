@@ -118,8 +118,14 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 		return nil, err
 	}
 
+	// Create middlewares first to ensure rate limiting and flood wait handling
+	middlewares := tgc.NewMiddleware(&a.cnf.TG, tgc.WithFloodWait(),
+		tgc.WithRecovery(ctx),
+		tgc.WithRetry(a.cnf.TG.Uploads.MaxRetries),
+		tgc.WithRateLimit())
+
 	if len(tokens) == 0 {
-		client, err = tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession)
+		client, err = tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession, middlewares...)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +133,7 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 	} else {
 		a.worker.Set(tokens, userId)
 		token, index = a.worker.Next(userId)
-		client, err = tgc.BotClient(ctx, a.db, a.cache, &a.cnf.TG, token)
+		client, err = tgc.BotClient(ctx, a.db, a.cache, &a.cnf.TG, token, middlewares...)
 
 		if err != nil {
 			return nil, err
@@ -135,11 +141,6 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 
 		channelUser = strings.Split(token, ":")[0]
 	}
-
-	middlewares := tgc.NewMiddleware(&a.cnf.TG, tgc.WithFloodWait(),
-		tgc.WithRecovery(ctx),
-		tgc.WithRetry(a.cnf.TG.Uploads.MaxRetries),
-		tgc.WithRateLimit())
 
 	uploadPool := pool.NewPool(client, int64(a.cnf.TG.PoolSize), middlewares...)
 

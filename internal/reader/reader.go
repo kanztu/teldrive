@@ -2,6 +2,7 @@ package reader
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/gotd/td/tg"
@@ -125,7 +126,18 @@ func (r *Reader) moveToNextPart() error {
 }
 
 func (r *Reader) getPartReader() (io.ReadCloser, error) {
+	// Bounds check for ranges position
+	if r.pos >= len(r.ranges) {
+		return nil, fmt.Errorf("position %d out of range (max %d)", r.pos, len(r.ranges)-1)
+	}
+
 	currentRange := r.ranges[r.pos]
+
+	// Bounds check for parts array
+	if currentRange.PartNo < 0 || currentRange.PartNo >= int64(len(r.parts)) {
+		return nil, fmt.Errorf("part number %d out of range (available parts: %d)", currentRange.PartNo, len(r.parts))
+	}
+
 	partId := r.parts[currentRange.PartNo].ID
 
 	chunkSrc := &chunkSource{
@@ -145,6 +157,11 @@ func (r *Reader) getPartReader() (io.ReadCloser, error) {
 	reader, err = newTGMultiReader(r.ctx, currentRange.Start, currentRange.End, r.config, chunkSrc)
 
 	if *r.file.Encrypted {
+		// Additional bounds check for encrypted files
+		if r.pos >= len(r.ranges) || r.ranges[r.pos].PartNo >= int64(len(r.parts)) {
+			return nil, fmt.Errorf("invalid range or part index during encryption: pos=%d, partNo=%d", r.pos, r.ranges[r.pos].PartNo)
+		}
+
 		salt := r.parts[r.ranges[r.pos].PartNo].Salt
 		cipher, _ := crypt.NewCipher(r.config.Uploads.EncryptionKey, salt)
 		reader, err = cipher.DecryptDataSeek(r.ctx,
@@ -154,6 +171,10 @@ func (r *Reader) getPartReader() (io.ReadCloser, error) {
 				var end int64
 
 				if underlyingLimit >= 0 {
+					// Additional bounds check before accessing parts
+					if r.pos >= len(r.ranges) || r.ranges[r.pos].PartNo >= int64(len(r.parts)) {
+						return nil, fmt.Errorf("invalid part index in decryption callback")
+					}
 					end = min(r.parts[r.ranges[r.pos].PartNo].Size-1, underlyingOffset+underlyingLimit-1)
 				}
 
