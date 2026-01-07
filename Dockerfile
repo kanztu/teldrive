@@ -16,8 +16,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Create dummy UI dist directory (UI is optional for backend)
-RUN mkdir -p ui/dist && echo "Docker build" > ui/dist/index.html
+# Download and extract UI assets (matching goreleaser before hooks)
+RUN go run scripts/extract.go -url https://github.com/tgdrive/teldrive-ui/releases/download/latest/teldrive-ui.zip -output ui/dist
 
 # Generate API code (required for compilation)
 RUN go generate ./...
