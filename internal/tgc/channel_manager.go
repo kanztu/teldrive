@@ -17,6 +17,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/config"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgstorage"
+	"github.com/tgdrive/teldrive/internal/utils"
 	"github.com/tgdrive/teldrive/pkg/models"
 	"github.com/tgdrive/teldrive/pkg/types"
 	"go.uber.org/zap"
@@ -308,12 +309,15 @@ func (cm *ChannelManager) AddBotsToChannel(ctx context.Context, userId int64, ch
 		}
 
 		done := make(chan struct{})
-		go func() {
+		logger := logging.FromContext(ctx)
+		utils.SafeGo(logger, func() {
+			defer func() {
+				close(infoChan)
+				close(errChan)
+				close(done)
+			}()
 			g.Wait()
-			close(infoChan)
-			close(errChan)
-			close(done)
-		}()
+		})
 
 		var botInfos []*types.BotInfo
 		var botErrors []error

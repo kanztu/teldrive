@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 func CamelToSnake(input string) string {
@@ -59,4 +62,19 @@ func Find[T any](slice []T, predicate func(T) bool) (T, bool) {
 	}
 	var zero T
 	return zero, false
+}
+
+// SafeGo launches a goroutine with panic recovery to prevent server crashes
+// This should be used for all goroutines to ensure a single panic doesn't crash the entire server
+func SafeGo(logger *zap.Logger, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("goroutine panic recovered",
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
+		fn()
+	}()
 }

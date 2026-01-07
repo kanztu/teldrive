@@ -58,6 +58,13 @@ func NewReader(ctx context.Context,
 	end int64,
 	config *config.TGConfig,
 ) (io.ReadCloser, error) {
+	// Validate file has required fields
+	if file.ChannelId == nil {
+		return nil, fmt.Errorf("file %s has no channel ID", file.ID)
+	}
+	if file.Encrypted == nil {
+		return nil, fmt.Errorf("file %s encryption status is unknown", file.ID)
+	}
 
 	size := parts[0].Size
 	if *file.Encrypted {
@@ -126,6 +133,14 @@ func (r *Reader) moveToNextPart() error {
 }
 
 func (r *Reader) getPartReader() (io.ReadCloser, error) {
+	// Nil safety checks - prevent panics on missing file metadata
+	if r.file.ChannelId == nil {
+		return nil, fmt.Errorf("file %s has no channel ID", r.file.ID)
+	}
+	if r.file.Encrypted == nil {
+		return nil, fmt.Errorf("file %s encryption status is unknown", r.file.ID)
+	}
+
 	// Bounds check for ranges position
 	if r.pos >= len(r.ranges) {
 		return nil, fmt.Errorf("position %d out of range (max %d)", r.pos, len(r.ranges)-1)

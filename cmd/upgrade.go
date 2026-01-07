@@ -75,7 +75,12 @@ func executeScript(e scriptExecutor) error {
 	}
 
 	go func() {
-		defer stdin.Close()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "panic in stdin write: %v\n", r)
+			}
+			stdin.Close()
+		}()
 		stdin.Write(scriptContent)
 	}()
 
@@ -89,6 +94,11 @@ func executeScript(e scriptExecutor) error {
 
 	if e.platformType == "windows" {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "panic in file cleanup: %v\n", r)
+				}
+			}()
 			oldPath := filepath.Join(executableDir, executableName+".old")
 			_ = os.Remove(oldPath)
 		}()

@@ -59,9 +59,9 @@ type JWTConfig struct {
 
 type DBPool struct {
 	Enable             bool          `koanf:"enable" default:"true" description:"Enable connection pooling"`
-	MaxOpenConnections int           `koanf:"max-open-connections" default:"25" description:"Maximum number of open connections"`
-	MaxIdleConnections int           `koanf:"max-idle-connections" default:"25" description:"Maximum number of idle connections"`
-	MaxLifetime        time.Duration `koanf:"max-lifetime" default:"10m" description:"Maximum connection lifetime"`
+	MaxOpenConnections int           `koanf:"max-open-connections" default:"200" description:"Maximum number of open connections (increased for high concurrency)"`
+	MaxIdleConnections int           `koanf:"max-idle-connections" default:"50" description:"Maximum number of idle connections"`
+	MaxLifetime        time.Duration `koanf:"max-lifetime" default:"30m" description:"Maximum connection lifetime"`
 }
 type DBConfig struct {
 	DataSource  string `validate:"required" koanf:"data-source" default:"" description:"Database connection string"`

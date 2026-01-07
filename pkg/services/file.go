@@ -131,6 +131,11 @@ func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params ap
 
 	file := res[0]
 
+	// Validate file has required fields for copying
+	if file.Parts == nil || file.ChannelId == nil {
+		return nil, &apiError{err: errors.New("invalid file: missing parts or channel"), code: 500}
+	}
+
 	newIds := []api.Part{}
 
 	channelId, err := a.channelManager.CurrentChannel(userId)
@@ -339,11 +344,15 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 	).Scan(&fileDB).Error; err != nil {
 		return nil, &apiError{err: err}
 	}
+	parentID := ""
+	if fileDB.ParentId != nil {
+		parentID = *fileDB.ParentId
+	}
 	a.events.Record(events.OpCreate, userId, &models.Source{
 		ID:       fileDB.ID,
 		Type:     fileDB.Type,
 		Name:     fileDB.Name,
-		ParentID: *fileDB.ParentId,
+		ParentID: parentID,
 	})
 	return mapper.ToFileOut(fileDB), nil
 }
@@ -392,11 +401,15 @@ func (a *apiService) FilesDelete(ctx context.Context, req *api.FileDelete) error
 		return &apiError{err: err}
 	}
 
+	parentID := ""
+	if fileDB.ParentId != nil {
+		parentID = *fileDB.ParentId
+	}
 	a.events.Record(events.OpDelete, userId, &models.Source{
 		ID:       fileDB.ID,
 		Type:     fileDB.Type,
 		Name:     fileDB.Name,
-		ParentID: *fileDB.ParentId,
+		ParentID: parentID,
 	})
 
 	return nil
@@ -530,11 +543,15 @@ func (a *apiService) FilesMove(ctx context.Context, req *api.FileMove) error {
 			Update("parent_id", req.DestinationParent).Error; err != nil {
 			return err
 		}
+		srcParentID := ""
+		if srcFile.ParentId != nil {
+			srcParentID = *srcFile.ParentId
+		}
 		a.events.Record(events.OpMove, userId, &models.Source{
 			ID:           req.DestinationParent,
 			Type:         srcFile.Type,
 			Name:         srcFile.Name,
-			ParentID:     *srcFile.ParentId,
+			ParentID:     srcParentID,
 			DestParentID: req.DestinationParent,
 		})
 		return nil
@@ -611,11 +628,15 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 		return nil, &apiError{err: err}
 	}
 
+	fileParentID := ""
+	if file.ParentId != nil {
+		fileParentID = *file.ParentId
+	}
 	a.events.Record(events.OpUpdate, userId, &models.Source{
 		ID:       file.ID,
 		Type:     file.Type,
 		Name:     file.Name,
-		ParentID: *file.ParentId,
+		ParentID: fileParentID,
 	})
 	return mapper.ToFileOut(file), nil
 }
@@ -805,16 +826,22 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 		session = &models.Session{UserId: userId}
 	}
 
-	file, err := cache.Fetch(e.api.cache, cache.Key("files", fileId), 0, func() (*models.File, error) {
+	// Fetch file with user ownership verification to prevent unauthorized access
+	file, err := cache.Fetch(e.api.cache, cache.Key("files", fileId, session.UserId), 0, func() (*models.File, error) {
 		var result models.File
-		if err := e.api.db.Model(&result).Where("id = ?", fileId).First(&result).Error; err != nil {
+		// SECURITY: Verify user owns the file before streaming
+		if err := e.api.db.Model(&result).
+			Where("id = ? AND user_id = ?", fileId, session.UserId).
+			First(&result).Error; err != nil {
 			return nil, err
 		}
 		return &result, nil
 	})
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// Don't expose internal error details
+		logger.Error("failed to fetch file", zap.Error(err), zap.String("fileId", fileId))
+		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
@@ -957,7 +984,7 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 			done := make(chan struct{})
 			defer close(done)
 
-			go func() {
+			utils.SafeGo(logger, func() {
 				select {
 				case <-ctx.Done():
 					// Client disconnected, close reader immediately
@@ -967,7 +994,7 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 				case <-done:
 					// Normal completion, do nothing
 				}
-			}()
+			})
 
 			// Use context-aware copy to detect client disconnects
 			_, err = copyWithContext(ctx, w, lr, contentLength)

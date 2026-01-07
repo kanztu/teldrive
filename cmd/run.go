@@ -23,6 +23,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/middleware"
 	"github.com/tgdrive/teldrive/internal/tgc"
+	"github.com/tgdrive/teldrive/internal/utils"
 	"github.com/tgdrive/teldrive/ui"
 
 	"github.com/tgdrive/teldrive/pkg/cron"
@@ -121,12 +122,12 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 		}
 	}
 
-	go func() {
+	utils.SafeGo(lg, func() {
 		lg.Info("server started", zap.String("address", fmt.Sprintf("http://localhost:%d", conf.Server.Port)))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			lg.Error("failed to start server", zap.Error(err))
 		}
-	}()
+	})
 
 	<-ctx.Done()
 

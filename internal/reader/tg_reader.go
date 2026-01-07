@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -13,9 +14,26 @@ import (
 	"github.com/tgdrive/teldrive/internal/config"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
+	"github.com/tgdrive/teldrive/internal/utils"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+// Global buffer pool for reusing byte slices to reduce GC pressure
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		// Pre-allocate buffers for typical chunk sizes (4MB)
+		return &buffer{
+			buf:    make([]byte, 0, 4*1024*1024),
+			offset: 0,
+		}
+	},
+}
+
+func init() {
+	// Initialize the buffer pool pointer for access from buffer.go
+	bufferPoolPtr = &bufferPool
+}
 
 var (
 	ErrStreamAbandoned = errors.New("stream abandoned")
@@ -112,6 +130,15 @@ func newTGMultiReader(
 
 func (r *tgMultiReader) Close() error {
 	r.cancel()
+	// Return current buffer to pool
+	if r.cur != nil {
+		putBuffer(r.cur)
+		r.cur = nil
+	}
+	// Drain and return any remaining buffers in channel
+	for buf := range r.bufferChan {
+		putBuffer(buf)
+	}
 	return nil
 }
 
@@ -121,6 +148,12 @@ func (r *tgMultiReader) Read(p []byte) (int, error) {
 	}
 
 	if r.cur == nil || r.cur.isEmpty() {
+		// Return previous buffer to pool before getting new one
+		if r.cur != nil {
+			putBuffer(r.cur)
+			r.cur = nil
+		}
+
 		select {
 		case cur, ok := <-r.bufferChan:
 			if !ok {
@@ -137,6 +170,11 @@ func (r *tgMultiReader) Read(p []byte) (int, error) {
 	r.limit -= int64(n)
 
 	if r.limit <= 0 {
+		// Return final buffer to pool
+		if r.cur != nil {
+			putBuffer(r.cur)
+			r.cur = nil
+		}
 		return n, io.EOF
 	}
 
@@ -181,7 +219,10 @@ func (r *tgMultiReader) fillBatch() error {
 				chunk = chunk[:r.rightCut]
 			}
 
-			buffers[i] = &buffer{buf: chunk}
+			// Get buffer from pool and set chunk data
+			buf := getBuffer()
+			buf.buf = append(buf.buf, chunk...)
+			buffers[i] = buf
 			return nil
 		})
 	}
@@ -215,14 +256,30 @@ func (r *tgMultiReader) fetchChunk(ctx context.Context, i int64) ([]byte, error)
 	chunkChan := make(chan []byte, 1)
 	errChan := make(chan error, 1)
 
-	go func() {
-		chunk, err := r.chunkSrc.Chunk(ctx, r.offset+i*r.chunkSize, r.chunkSize)
-		if err != nil {
-			errChan <- err
-		} else {
-			chunkChan <- chunk
+	logger := logging.FromContext(ctx)
+	utils.SafeGo(logger, func() {
+		// Check if context is cancelled before expensive operation
+		select {
+		case <-ctx.Done():
+			errChan <- ctx.Err()
+			return
+		default:
 		}
-	}()
+
+		chunk, err := r.chunkSrc.Chunk(ctx, r.offset+i*r.chunkSize, r.chunkSize)
+
+		// Check again before sending result
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if err != nil {
+				errChan <- err
+			} else {
+				chunkChan <- chunk
+			}
+		}
+	})
 
 	select {
 	case chunk := <-chunkChan:

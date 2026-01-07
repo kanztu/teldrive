@@ -30,8 +30,16 @@ func (w *BotWorker) Set(bots []string, userID int64) {
 func (w *BotWorker) Next(userID int64) (string, int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	bots := w.bots[userID]
+	bots, exists := w.bots[userID]
+	if !exists || len(bots) == 0 {
+		return "", -1
+	}
 	index := w.currIdx[userID]
+	// Ensure index is within bounds (safety check)
+	if index >= len(bots) {
+		index = 0
+		w.currIdx[userID] = 0
+	}
 	w.currIdx[userID] = (index + 1) % len(bots)
 	return bots[index], index
 }
