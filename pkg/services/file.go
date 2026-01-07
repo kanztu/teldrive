@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -686,6 +687,90 @@ func (a *apiService) FilesUpdateParts(ctx context.Context, req *api.FilePartsUpd
 	return nil
 }
 
+// copyWithContext performs an io.Copy operation with context cancellation support
+// This is critical for video streaming to detect when clients disconnect
+func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader, n int64) (int64, error) {
+	buf := make([]byte, 32*1024) // 32KB buffer for efficient copying
+	written := int64(0)
+
+	for written < n {
+		// Check if context is cancelled (client disconnected)
+		select {
+		case <-ctx.Done():
+			return written, ctx.Err()
+		default:
+			// Calculate how much to read
+			toRead := int64(len(buf))
+			if remaining := n - written; remaining < toRead {
+				toRead = remaining
+			}
+
+			// Read from source
+			nr, er := src.Read(buf[:toRead])
+			if nr > 0 {
+				// Write to destination
+				nw, ew := dst.Write(buf[0:nr])
+				written += int64(nw)
+
+				// Flush if ResponseWriter supports it (helps with streaming)
+				if f, ok := dst.(http.Flusher); ok {
+					f.Flush()
+				}
+
+				if ew != nil {
+					return written, ew
+				}
+				if nr != nw {
+					return written, io.ErrShortWrite
+				}
+			}
+			if er != nil {
+				if er == io.EOF {
+					break
+				}
+				return written, er
+			}
+		}
+	}
+	return written, nil
+}
+
+// getMimeTypeFromFilename detects MIME type from file extension
+// with special handling for video formats
+func getMimeTypeFromFilename(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	// Video MIME types (prioritized for video streaming)
+	videoMimeTypes := map[string]string{
+		".mp4":  "video/mp4",
+		".webm": "video/webm",
+		".mkv":  "video/x-matroska",
+		".avi":  "video/x-msvideo",
+		".mov":  "video/quicktime",
+		".m4v":  "video/x-m4v",
+		".flv":  "video/x-flv",
+		".wmv":  "video/x-ms-wmv",
+		".mpg":  "video/mpeg",
+		".mpeg": "video/mpeg",
+		".m2v":  "video/mpeg",
+		".3gp":  "video/3gpp",
+		".ogv":  "video/ogg",
+	}
+
+	if mimeType, ok := videoMimeTypes[ext]; ok {
+		return mimeType
+	}
+
+	// Fall back to standard library for other types
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType != "" {
+		return mimeType
+	}
+
+	// Default fallback
+	return "application/octet-stream"
+}
+
 func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fileId string, userId int64) {
 	ctx := r.Context()
 	logger := logging.FromContext(ctx)
@@ -738,10 +823,12 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	var start, end int64
 
 	rangeHeader := r.Header.Get("Range")
-	contentType := defaultContentType
 
-	if file.MimeType != "" {
-		contentType = file.MimeType
+	// Determine content type with fallback to extension-based detection
+	contentType := file.MimeType
+	if contentType == "" {
+		// Auto-detect MIME type from filename for better video streaming support
+		contentType = getMimeTypeFromFilename(file.Name)
 	}
 
 	if file.Size == nil || *file.Size == 0 {
@@ -866,8 +953,30 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 				return nil
 			}
 
-			_, err = io.CopyN(w, lr, contentLength)
+			// Monitor for client disconnect and cleanup resources
+			done := make(chan struct{})
+			defer close(done)
+
+			go func() {
+				select {
+				case <-ctx.Done():
+					// Client disconnected, close reader immediately
+					logger.Debug("client disconnected, stopping stream",
+						zap.String("fileId", fileId))
+					_ = lr.Close()
+				case <-done:
+					// Normal completion, do nothing
+				}
+			}()
+
+			// Use context-aware copy to detect client disconnects
+			_, err = copyWithContext(ctx, w, lr, contentLength)
 			if err != nil {
+				if err == context.Canceled {
+					logger.Debug("stream cancelled by client", zap.String("fileId", fileId))
+				} else {
+					logger.Error("stream error", zap.Error(err), zap.String("fileId", fileId))
+				}
 				_ = lr.Close()
 			}
 			return nil

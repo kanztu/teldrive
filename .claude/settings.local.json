@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(find:*)",
+      "Bash(go list:*)",
+      "Bash(ls:*)",
+      "Bash(go generate ./...)"
+    ]
+  }
+}

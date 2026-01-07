@@ -244,10 +244,21 @@ func GetLocation(ctx context.Context, client *tg.Client, channelId int64, partId
 }
 
 func CalculateChunkSize(start, end int64) int64 {
-	chunkSize := int64(1024 * 1024)
+	// Use 4MB chunks for better video streaming performance
+	// This balances memory usage with throughput for HD video
+	chunkSize := int64(4 * 1024 * 1024) // 4MB default
 
-	for chunkSize > 1024 && chunkSize > (end-start) {
+	rangeSize := end - start + 1
+
+	// For very large ranges (>100MB), consider larger chunks
+	if rangeSize > 100*1024*1024 {
+		chunkSize = 8 * 1024 * 1024 // 8MB for large files
+	}
+
+	// Reduce chunk size if it exceeds the range
+	for chunkSize > 1024 && chunkSize > rangeSize {
 		chunkSize /= 2
 	}
+
 	return chunkSize
 }

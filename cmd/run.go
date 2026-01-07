@@ -163,8 +163,24 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	mux.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
-		MaxAge:         86400,
+		AllowedHeaders: []string{
+			"Accept",
+			"Authorization",
+			"Content-Type",
+			"Range",            // Critical for video streaming (seeking)
+			"If-None-Match",    // For ETag caching
+			"If-Modified-Since", // For Last-Modified caching
+		},
+		ExposedHeaders: []string{
+			"Content-Range",      // Critical for partial content responses
+			"Content-Length",     // For download progress tracking
+			"Accept-Ranges",      // Indicates server supports range requests
+			"ETag",               // For cache validation
+			"Last-Modified",      // For cache validation
+			"Content-Disposition", // For filename
+		},
+		AllowCredentials: true, // Allow cookies for authenticated requests
+		MaxAge:           86400,
 	}))
 	mux.Use(chimiddleware.RealIP)
 	mux.Use(middleware.InjectLogger(lg))
