@@ -19,6 +19,14 @@ import (
 )
 
 func getParts(ctx context.Context, client *telegram.Client, c cache.Cacher, file *models.File) ([]types.Part, error) {
+	// Nil safety checks
+	if file.Parts == nil {
+		return nil, errors.New("file has no parts")
+	}
+	if file.ChannelId == nil {
+		return nil, errors.New("file has no channel ID")
+	}
+
 	return cache.Fetch(c, cache.Key("files", "messages", file.ID), 60*time.Minute, func() ([]types.Part, error) {
 		messages, err := tgc.GetMessages(ctx, client.API(), utils.Map(*file.Parts, func(part api.Part) int {
 			return part.ID

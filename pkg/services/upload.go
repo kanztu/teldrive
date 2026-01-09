@@ -249,24 +249,36 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 
 		v, err := client.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{Channel: channel, ID: []tg.InputMessageClass{&tg.InputMessageID{ID: message.ID}}})
 
-		if err != nil || v == nil {
+		if err != nil {
+			logger.Error("upload verification failed: cannot retrieve message", zap.Error(err), zap.Int("messageId", message.ID))
+			return fmt.Errorf("upload verification failed: %w", err)
+		}
+		if v == nil {
+			logger.Error("upload verification failed: message response is nil", zap.Int("messageId", message.ID))
 			return ErrUploadFailed
 		}
 
 		switch msgs := v.(type) {
 		case *tg.MessagesChannelMessages:
 			if len(msgs.Messages) == 0 {
+				logger.Error("upload verification failed: no messages returned", zap.Int("messageId", message.ID))
 				return ErrUploadFailed
 			}
 			doc, ok := msgDocument(msgs.Messages[0])
 			if !ok {
+				logger.Error("upload verification failed: cannot extract document from message", zap.Int("messageId", message.ID))
 				return ErrUploadFailed
 			}
 			if doc.Size != fileSize {
+				logger.Error("upload verification failed: size mismatch",
+					zap.Int64("expected", fileSize),
+					zap.Int64("actual", doc.Size),
+					zap.Int("messageId", message.ID))
 				_, _ = client.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{Channel: channel, ID: []int{message.ID}})
-				return ErrUploadFailed
+				return fmt.Errorf("upload verification failed: size mismatch (expected %d, got %d)", fileSize, doc.Size)
 			}
 		default:
+			logger.Error("upload verification failed: unexpected message type", zap.Any("type", v))
 			return ErrUploadFailed
 		}
 
